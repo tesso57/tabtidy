@@ -4,14 +4,24 @@ import { describe, it } from 'node:test';
 import { detectLocalAiStatus, prepareLocalModel } from '../src/lib/local-ai.ts';
 
 describe('detectLocalAiStatus', () => {
-  it('detects modern LanguageModel availability states', async () => {
+  it('detects modern LanguageModel availability states and specifies expectedOutputs', async () => {
+    let receivedOptions: unknown = null;
     const ready = await detectLocalAiStatus({
-      LanguageModel: { availability: async () => 'available' },
+      LanguageModel: {
+        availability: async (opts) => {
+          receivedOptions = opts;
+          return 'available';
+        },
+      },
       hasSegmenter: true,
     });
     assert.equal(ready.llm.availability, 'available');
     assert.equal(ready.llm.apiKind, 'LanguageModel');
     assert.equal(ready.segmenter.available, true);
+    assert.deepEqual(receivedOptions, {
+      expectedInputs: [{ type: 'text', languages: ['ja', 'en'] }],
+      expectedOutputs: [{ type: 'text', languages: ['ja'] }],
+    });
 
     const downloadable = await detectLocalAiStatus({
       LanguageModel: { availability: async () => 'downloadable' },
@@ -54,12 +64,14 @@ describe('detectLocalAiStatus', () => {
 
     let destroyed = false;
     let currentState = 'downloadable';
+    let createOutputs: unknown = null;
     const progressValues: number[] = [];
 
     const next = await prepareLocalModel((pct) => progressValues.push(pct), {
       LanguageModel: {
         availability: async () => currentState,
         create: async (opts) => {
+          createOutputs = opts?.expectedOutputs;
           opts?.monitor?.({
             addEventListener: (_type, cb) => {
               cb({ loaded: 0.5 });
@@ -77,6 +89,7 @@ describe('detectLocalAiStatus', () => {
     });
 
     assert.equal(destroyed, true);
+    assert.deepEqual(createOutputs, [{ type: 'text', languages: ['ja'] }]);
     assert.deepEqual(progressValues, [50, 100]);
     assert.equal(next.llm.availability, 'available');
   });

@@ -21,15 +21,32 @@ export interface LocalAiStatus {
   checkedAt: number;
 }
 
+interface LanguageModelModality {
+  type: 'text';
+  languages: string[];
+}
+
+export const LANGUAGE_MODEL_OPTIONS: {
+  expectedInputs: LanguageModelModality[];
+  expectedOutputs: LanguageModelModality[];
+} = {
+  expectedInputs: [{ type: 'text', languages: ['ja', 'en'] }],
+  expectedOutputs: [{ type: 'text', languages: ['ja'] }],
+};
+
 interface ModernLanguageModelSession {
   destroy?: () => void;
 }
 
 interface ModernLanguageModelApi {
-  availability?: (options?: Record<string, unknown>) => Promise<string>;
-  create?: (options?: {
-    monitor?: (m: { addEventListener: (type: string, cb: (e: { loaded?: number }) => void) => void }) => void;
-  }) => Promise<ModernLanguageModelSession>;
+  availability?: (options?: typeof LANGUAGE_MODEL_OPTIONS) => Promise<string>;
+  create?: (
+    options?: typeof LANGUAGE_MODEL_OPTIONS & {
+      monitor?: (m: {
+        addEventListener: (type: string, cb: (e: { loaded?: number }) => void) => void;
+      }) => void;
+    }
+  ) => Promise<ModernLanguageModelSession>;
 }
 
 interface LegacyAiApi {
@@ -65,7 +82,7 @@ export async function detectLocalAiStatus(
   const lm = env.LanguageModel;
   if (lm && typeof lm.availability === 'function') {
     try {
-      const raw = await lm.availability();
+      const raw = await lm.availability(LANGUAGE_MODEL_OPTIONS);
       return {
         llm: {
           availability: normalizeAvailability(raw),
@@ -140,6 +157,7 @@ export async function prepareLocalModel(
 ): Promise<LocalAiStatus> {
   if (env.LanguageModel && typeof env.LanguageModel.create === 'function') {
     const session = await env.LanguageModel.create({
+      ...LANGUAGE_MODEL_OPTIONS,
       monitor(m) {
         m.addEventListener('downloadprogress', (e) => {
           const pct = Math.min(100, Math.max(0, Math.round((e.loaded ?? 0) * 100)));
