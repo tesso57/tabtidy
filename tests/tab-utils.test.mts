@@ -6,6 +6,7 @@ import {
   filterTabs,
   findDuplicateTabs,
   findStaleTabs,
+  getSafeFaviconUrl,
   GROUP_COLORS,
   pickGroupColor,
   summarizeTabs,
@@ -24,6 +25,16 @@ describe('extractDomain', () => {
     assert.equal(extractDomain('about:blank'), 'システム');
     assert.equal(extractDomain(''), 'その他');
     assert.equal(extractDomain('not-a-url'), 'その他');
+  });
+});
+
+describe('getSafeFaviconUrl', () => {
+  it('allows http and https favicon URLs and rejects unsafe protocols', () => {
+    assert.equal(getSafeFaviconUrl('https://example.com/favicon.ico'), 'https://example.com/favicon.ico');
+    assert.equal(getSafeFaviconUrl('http://localhost:3000/icon.png'), 'http://localhost:3000/icon.png');
+    assert.equal(getSafeFaviconUrl('chrome://favicon/https://example.com'), '');
+    assert.equal(getSafeFaviconUrl('javascript:alert(1)', 'fallback.png'), 'fallback.png');
+    assert.equal(getSafeFaviconUrl(undefined, 'fallback.png'), 'fallback.png');
   });
 });
 

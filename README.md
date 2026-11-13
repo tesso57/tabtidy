@@ -52,8 +52,9 @@ npm run build
 npm run dev           # Vite 開発サーバー
 npm run typecheck     # TypeScript 型チェック (tsc --noEmit)
 npm run build         # 型チェック + dist/ へ本番ビルド
-npm test              # Node 標準テストランナーでテスト実行
-npm run check:secrets # 機密情報・禁止ファイル混入チェック
+npm test                  # Node 標準テストランナーでテスト実行
+npm run knip              # 未使用ファイル・依存・エクスポート検査
+npm run check:secrets     # 機密情報・禁止ファイル混入チェック
 ```
 
 ## ディレクトリ構成

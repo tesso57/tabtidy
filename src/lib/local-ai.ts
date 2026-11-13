@@ -6,7 +6,7 @@ export type LocalLlmAvailability =
   | 'unsupported'
   | 'error';
 
-export type LocalLlmApiKind = 'LanguageModel' | 'ai.languageModel' | 'none';
+type LocalLlmApiKind = 'LanguageModel' | 'ai.languageModel' | 'none';
 
 export interface LocalAiStatus {
   llm: {
@@ -26,7 +26,7 @@ interface LanguageModelModality {
   languages: string[];
 }
 
-export const LANGUAGE_MODEL_OPTIONS: {
+const LANGUAGE_MODEL_OPTIONS: {
   expectedInputs: LanguageModelModality[];
   expectedOutputs: LanguageModelModality[];
 } = {
@@ -65,6 +65,36 @@ function normalizeAvailability(raw: unknown): LocalLlmAvailability {
   return 'unavailable';
 }
 
+async function detectWithProvider(
+  apiKind: Exclude<LocalLlmApiKind, 'none'>,
+  probe: () => Promise<string>,
+  hasSegmenter: boolean
+): Promise<LocalAiStatus> {
+  try {
+    const raw = await probe();
+    return {
+      llm: {
+        availability: normalizeAvailability(raw),
+        apiKind,
+        rawStatus: String(raw),
+      },
+      segmenter: { available: hasSegmenter },
+      checkedAt: Date.now(),
+    };
+  } catch (err) {
+    return {
+      llm: {
+        availability: 'error',
+        apiKind,
+        rawStatus: 'error',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      segmenter: { available: hasSegmenter },
+      checkedAt: Date.now(),
+    };
+  }
+}
+
 export async function detectLocalAiStatus(
   env: {
     LanguageModel?: ModernLanguageModelApi;
@@ -81,57 +111,22 @@ export async function detectLocalAiStatus(
 
   const lm = env.LanguageModel;
   if (lm && typeof lm.availability === 'function') {
-    try {
-      const raw = await lm.availability(LANGUAGE_MODEL_OPTIONS);
-      return {
-        llm: {
-          availability: normalizeAvailability(raw),
-          apiKind: 'LanguageModel',
-          rawStatus: String(raw),
-        },
-        segmenter: { available: hasSegmenter },
-        checkedAt: Date.now(),
-      };
-    } catch (err) {
-      return {
-        llm: {
-          availability: 'error',
-          apiKind: 'LanguageModel',
-          rawStatus: 'error',
-          detail: err instanceof Error ? err.message : String(err),
-        },
-        segmenter: { available: hasSegmenter },
-        checkedAt: Date.now(),
-      };
-    }
+    const checkModern = lm.availability.bind(lm);
+    return detectWithProvider(
+      'LanguageModel',
+      () => checkModern(LANGUAGE_MODEL_OPTIONS),
+      hasSegmenter
+    );
   }
 
   const legacy = env.ai?.languageModel;
   if (legacy && typeof legacy.capabilities === 'function') {
-    try {
-      const caps = await legacy.capabilities();
-      const raw = caps?.available ?? 'no';
-      return {
-        llm: {
-          availability: normalizeAvailability(raw),
-          apiKind: 'ai.languageModel',
-          rawStatus: String(raw),
-        },
-        segmenter: { available: hasSegmenter },
-        checkedAt: Date.now(),
-      };
-    } catch (err) {
-      return {
-        llm: {
-          availability: 'error',
-          apiKind: 'ai.languageModel',
-          rawStatus: 'error',
-          detail: err instanceof Error ? err.message : String(err),
-        },
-        segmenter: { available: hasSegmenter },
-        checkedAt: Date.now(),
-      };
-    }
+    const checkLegacy = legacy.capabilities.bind(legacy);
+    return detectWithProvider(
+      'ai.languageModel',
+      async () => (await checkLegacy())?.available ?? 'no',
+      hasSegmenter
+    );
   }
 
   return {

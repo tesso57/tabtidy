@@ -9,7 +9,7 @@ import type {
   UndoSnapshot,
 } from '../types/tab.ts';
 import { planSmartOrganize, type ClusterOptions, type UnnecessaryAnalysisOptions } from './content-classifier.ts';
-import { findDuplicateTabs, findStaleTabs, getTabUrl } from './tab-utils.ts';
+import { findDuplicateTabs, findStaleTabs, getSafeFaviconUrl, getTabUrl } from './tab-utils.ts';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoGroup: false,
@@ -81,19 +81,23 @@ export async function getUndoSnapshot(): Promise<UndoSnapshot | null> {
   return (data[STORAGE_KEYS.UNDO] as UndoSnapshot | undefined) || null;
 }
 
+async function openTabsInCurrentWindow(urls: string[]): Promise<void> {
+  const win = await chrome.windows.getCurrent();
+  for (const url of urls) {
+    await chrome.tabs.create({
+      windowId: win.id,
+      url,
+      active: false,
+    });
+  }
+}
+
 export async function restoreUndoSnapshot(): Promise<number> {
   const snapshot = await getUndoSnapshot();
   if (!snapshot || !Array.isArray(snapshot.tabs) || snapshot.tabs.length === 0) {
     return 0;
   }
-  const win = await chrome.windows.getCurrent();
-  for (const item of snapshot.tabs) {
-    await chrome.tabs.create({
-      windowId: win.id,
-      url: item.url,
-      active: false,
-    });
-  }
+  await openTabsInCurrentWindow(snapshot.tabs.map((item) => item.url));
   await chrome.storage.local.remove(STORAGE_KEYS.UNDO);
   return snapshot.tabs.length;
 }
@@ -194,7 +198,7 @@ function extractPageSignalsInPage(): PageSignals {
   return { title, metaDesc, headings, bodyText, hasFormDraft, hasVideo };
 }
 
-export async function inspectTabsContent(
+async function inspectTabsContent(
   tabs: chrome.tabs.Tab[]
 ): Promise<{ entries: InspectedEntry[]; inspectedCount: number }> {
   let inspectedCount = 0;
@@ -301,6 +305,10 @@ export async function getStashedSessions(): Promise<StashedSession[]> {
   return Array.isArray(list) ? (list as StashedSession[]) : [];
 }
 
+async function saveStashedSessions(sessions: StashedSession[]): Promise<void> {
+  await chrome.storage.local.set({ [STORAGE_KEYS.STASHED]: sessions.slice(0, 50) });
+}
+
 export async function stashTabs(
   tabs: TabLike[],
   label = ''
@@ -325,16 +333,13 @@ export async function stashTabs(
     tabs: stashable.map((t) => ({
       title: t.title || getTabUrl(t),
       url: getTabUrl(t),
-      favIconUrl:
-        t.favIconUrl && (t.favIconUrl.startsWith('http://') || t.favIconUrl.startsWith('https://'))
-          ? t.favIconUrl
-          : '',
+      favIconUrl: getSafeFaviconUrl(t.favIconUrl),
     })),
   };
 
   const sessions = await getStashedSessions();
   sessions.unshift(session);
-  await chrome.storage.local.set({ [STORAGE_KEYS.STASHED]: sessions.slice(0, 50) });
+  await saveStashedSessions(sessions);
 
   const closedCount = await safeCloseTabs(stashable);
   return { session, closedCount };
@@ -360,23 +365,15 @@ export async function restoreStashedSession(
     return 0;
   }
 
+  const urls = target.tabs.map((t) => t.url);
   if (newWindow) {
-    const urls = target.tabs.map((t) => t.url);
     await chrome.windows.create({ url: urls, focused: true });
   } else {
-    const win = await chrome.windows.getCurrent();
-    for (const item of target.tabs) {
-      await chrome.tabs.create({
-        windowId: win.id,
-        url: item.url,
-        active: false,
-      });
-    }
+    await openTabsInCurrentWindow(urls);
   }
 
   if (removeAfter) {
-    const remaining = sessions.filter((s) => s.id !== sessionId);
-    await chrome.storage.local.set({ [STORAGE_KEYS.STASHED]: remaining });
+    await saveStashedSessions(sessions.filter((s) => s.id !== sessionId));
   }
 
   return target.tabs.length;
@@ -384,6 +381,5 @@ export async function restoreStashedSession(
 
 export async function deleteStashedSession(sessionId: string): Promise<void> {
   const sessions = await getStashedSessions();
-  const remaining = sessions.filter((s) => s.id !== sessionId);
-  await chrome.storage.local.set({ [STORAGE_KEYS.STASHED]: remaining });
+  await saveStashedSessions(sessions.filter((s) => s.id !== sessionId));
 }

@@ -21,6 +21,16 @@ export function getTabUrl(tab: TabLike | null | undefined): string {
 }
 
 /**
+ * Return the favicon URL if it uses HTTP(S), otherwise fallback.
+ */
+export function getSafeFaviconUrl(favIconUrl?: string, fallback = ''): string {
+  if (favIconUrl && (favIconUrl.startsWith('http://') || favIconUrl.startsWith('https://'))) {
+    return favIconUrl;
+  }
+  return fallback;
+}
+
+/**
  * Extract a clean human-readable domain or category label from a URL.
  */
 export function extractDomain(rawUrl: string): string {
@@ -61,7 +71,7 @@ export function pickGroupColor(label: string): ChromeGroupColor {
 /**
  * Normalize a URL for duplicate comparison.
  */
-export function normalizeUrlForDedup(
+function normalizeUrlForDedup(
   rawUrl: string,
   options: { ignoreHash?: boolean } = {}
 ): string {

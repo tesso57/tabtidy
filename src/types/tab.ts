@@ -58,7 +58,7 @@ export interface ExtensionSettings {
   includeStaleInUnnecessary: boolean;
 }
 
-export interface StashedTabItem {
+interface StashedTabItem {
   title: string;
   url: string;
   favIconUrl: string;

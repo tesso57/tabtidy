@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 
-export interface SelectOption {
+interface SelectOption {
   value: string;
   label: string;
 }
