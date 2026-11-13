@@ -17,7 +17,12 @@ coverage/
 *.jks
 *.keystore
 *.crx
-*secret*
 *credentials*
+secrets.*
+secret.*
+*.secret
+*.secret.*
+secrets/
+.secrets/
 id_rsa*
 id_ed25519*
