@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+*.local
+*.zip
+*.tsbuildinfo
+
+# Secrets, keys, and local environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crx
+*secret*
+*credentials*
+id_rsa*
+id_ed25519*

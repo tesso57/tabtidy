@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "タブ整理アシスタント - TabTidy",
+  "version": "1.0.0",
+  "description": "散らかったタブを類似度で自動グループ化。不要タブの仕分け、重複タブ削除、検索、一時退避（スタッシュ）に対応。",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "タブを整理する",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "commands": {
+    "group-by-similarity": {
+      "description": "現在のウィンドウのタブを内容の類似度と不要判定でグループ化"
+    },
+    "close-duplicates": {
+      "description": "重複タブを削除"
+    }
+  }
+}
