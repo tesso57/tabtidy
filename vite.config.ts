@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
+      '@': resolve(import.meta.dirname, 'src'),
     },
   },
   build: {
@@ -17,8 +17,8 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, 'popup.html'),
-        'background/service-worker': resolve(__dirname, 'src/background/service-worker.ts'),
+        popup: resolve(import.meta.dirname, 'popup.html'),
+        'background/service-worker': resolve(import.meta.dirname, 'src/background/service-worker.ts'),
       },
       output: {
         entryFileNames: (chunkInfo) =>

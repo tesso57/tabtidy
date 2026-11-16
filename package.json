@@ -28,21 +28,21 @@
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^0.511.0",
+    "lucide-react": "^1.73.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.3.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.8",
-    "@types/chrome": "^0.0.326",
+    "@types/chrome": "^0.3.7",
     "@types/node": "^26.6.6",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
-    "@vitejs/plugin-react": "^4.5.0",
-    "knip": "^6.43.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "knip": "^6.45.1",
     "tailwindcss": "^4.1.8",
-    "typescript": "^5.8.3",
-    "vite": "^6.3.5"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
   }
 }

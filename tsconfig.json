@@ -16,11 +16,10 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
-    "types": ["chrome", "node"]
+    "types": ["chrome", "node", "vite/client"]
   },
   "include": ["src", "tests", "vite.config.ts"]
 }
