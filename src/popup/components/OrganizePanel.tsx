@@ -1,4 +1,5 @@
 import { CopyMinus, Pin, Search, Sparkles, Ungroup, Volume2, X } from 'lucide-react';
+import { memo, type SyntheticEvent } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,15 +13,118 @@ const FALLBACK_FAVICON =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="#94a3b8" stroke-width="1.3"/><path d="M1.5 5.5h13" stroke="#94a3b8" stroke-width="1.3"/></svg>'
   );
 
-const FILTER_ITEMS: Array<{ key: FilterKind; label: string }> = [
+const FILTER_ITEMS: readonly { key: FilterKind; label: string }[] = [
   { key: 'all', label: 'すべて' },
   { key: 'duplicates', label: '重複' },
   { key: 'ungrouped', label: '未グループ' },
   { key: 'audible', label: '再生中' },
 ];
 
+function handleFaviconError(e: SyntheticEvent<HTMLImageElement>) {
+  const img = e.currentTarget;
+  if (img.getAttribute('src') === FALLBACK_FAVICON || img.src === FALLBACK_FAVICON) {
+    return;
+  }
+  img.src = FALLBACK_FAVICON;
+}
+
+interface TabListItemProps {
+  tab: chrome.tabs.Tab;
+  isDuplicate: boolean;
+  isBusy: boolean;
+  onActivate: (tab: chrome.tabs.Tab) => void;
+  onClose: (tab: chrome.tabs.Tab) => void;
+}
+
+const TabListItem = memo(function TabListItem({
+  tab,
+  isDuplicate,
+  isBusy,
+  onActivate,
+  onClose,
+}: TabListItemProps) {
+  const rawUrl = getTabUrl(tab);
+  const iconUrl = getSafeFaviconUrl(tab.favIconUrl, FALLBACK_FAVICON);
+  const domain = extractDomain(rawUrl);
+  const tabLabel = tab.title || rawUrl || '(無題)';
+
+  const handleActivate = () => {
+    onActivate(tab);
+  };
+
+  const handleClose = () => {
+    onClose(tab);
+  };
+
+  return (
+    <li
+      className={cn(
+        'tab-row-virtual flex items-center gap-1 border-b border-border pr-2 transition-colors last:border-b-0 hover:bg-accent/70',
+        tab.active && 'border-l-2 border-l-primary bg-blue-50/75 dark:bg-blue-950/35'
+      )}
+    >
+      <button
+        type="button"
+        onClick={handleActivate}
+        aria-current={tab.active ? 'true' : undefined}
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-2 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <img
+          src={iconUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="h-4 w-4 shrink-0 rounded-xs object-contain"
+          onError={iconUrl === FALLBACK_FAVICON ? undefined : handleFaviconError}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className="truncate text-xs font-medium text-foreground">
+              {tabLabel}
+            </span>
+            {tab.pinned && (
+              <Badge variant="info" className="shrink-0 gap-0.5">
+                <Pin className="h-2.5 w-2.5" />
+                ピン
+              </Badge>
+            )}
+            {isDuplicate && (
+              <Badge variant="warning" className="shrink-0">
+                重複
+              </Badge>
+            )}
+            {tab.audible && (
+              <Badge variant="secondary" className="shrink-0 gap-0.5">
+                <Volume2 className="h-2.5 w-2.5" />
+                再生中
+              </Badge>
+            )}
+          </span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {domain} · {rawUrl}
+          </span>
+        </span>
+      </button>
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={Boolean(tab.pinned) || isBusy}
+        title={tab.pinned ? 'ピン留めタブは保護されています' : 'タブを閉じる'}
+        aria-label={
+          tab.pinned ? `${tabLabel}（ピン留めタブは保護されています）` : `${tabLabel} を閉じる`
+        }
+        onClick={handleClose}
+        className="shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+      >
+        <X className="h-3.5 w-3.5" />
+      </Button>
+    </li>
+  );
+});
+
 interface OrganizePanelProps {
-  tabs: chrome.tabs.Tab[];
+  tabs: readonly chrome.tabs.Tab[];
   summary: TabSummary;
   unpinnedCount: number;
   isBusy: boolean;
@@ -35,7 +139,7 @@ interface OrganizePanelProps {
   onCloseTab: (tab: chrome.tabs.Tab) => void;
 }
 
-export function OrganizePanel({
+export const OrganizePanel = memo(function OrganizePanel({
   tabs,
   summary,
   unpinnedCount,
@@ -56,7 +160,7 @@ export function OrganizePanel({
         size="default"
         disabled={unpinnedCount === 0 || isBusy}
         onClick={onSimilarityOrganize}
-        className="h-10 w-full justify-between bg-gradient-to-r from-blue-600 to-indigo-600 px-3 font-semibold text-white shadow-sm shadow-blue-600/20 hover:from-blue-600/95 hover:to-indigo-600/95 dark:from-blue-600 dark:to-indigo-500"
+        className="h-10 w-full justify-between bg-linear-to-r from-blue-600 to-indigo-600 px-3 font-semibold text-white shadow-sm shadow-blue-600/20 hover:from-blue-600/95 hover:to-indigo-600/95 dark:from-blue-600 dark:to-indigo-500"
       >
         <span className="inline-flex items-center gap-2">
           <Sparkles className="h-4 w-4" />
@@ -71,7 +175,7 @@ export function OrganizePanel({
         <Button
           variant="outline"
           size="sm"
-          disabled={summary.duplicates === 0}
+          disabled={summary.duplicates === 0 || isBusy}
           onClick={onDedup}
           className="justify-between px-2.5"
         >
@@ -87,7 +191,7 @@ export function OrganizePanel({
         <Button
           variant="outline"
           size="sm"
-          disabled={summary.grouped === 0}
+          disabled={summary.grouped === 0 || isBusy}
           onClick={onUngroup}
           className="justify-between px-2.5"
         >
@@ -106,6 +210,7 @@ export function OrganizePanel({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="タブを検索（タイトル・URL）..."
+          aria-label="タブを検索"
           className={cn('pl-8', query && 'pr-8')}
         />
         {query && (
@@ -113,7 +218,7 @@ export function OrganizePanel({
             type="button"
             aria-label="検索をクリア"
             onClick={() => onQueryChange('')}
-            className="absolute right-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+            className="absolute right-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
           >
             <X className="h-3 w-3" />
           </button>
@@ -125,9 +230,10 @@ export function OrganizePanel({
           <button
             key={item.key}
             type="button"
+            aria-pressed={filter === item.key}
             onClick={() => onFilterChange(item.key)}
             className={cn(
-              'inline-flex h-6 items-center justify-center rounded-full border px-2.5 text-[11px] font-medium transition-colors cursor-pointer',
+              'inline-flex h-6 items-center justify-center rounded-full border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer',
               filter === item.key
                 ? 'border-primary bg-primary text-primary-foreground'
                 : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground'
@@ -144,75 +250,18 @@ export function OrganizePanel({
             一致するタブはありません
           </li>
         ) : (
-          tabs.map((tab) => {
-            const rawUrl = getTabUrl(tab);
-            const iconUrl = getSafeFaviconUrl(tab.favIconUrl, FALLBACK_FAVICON);
-            const isDup = tab.id != null && summary.duplicateIds.has(tab.id);
-
-            return (
-              <li
-                key={tab.id ?? rawUrl}
-                onClick={() => onActivateTab(tab)}
-                className={cn(
-                  'flex cursor-pointer items-center gap-2.5 border-b border-border px-2.5 py-2 transition-colors last:border-b-0 hover:bg-accent/70',
-                  tab.active && 'border-l-2 border-l-primary bg-blue-50/75 dark:bg-blue-950/35'
-                )}
-              >
-                <img
-                  src={iconUrl}
-                  alt=""
-                  className="h-4 w-4 shrink-0 rounded-xs object-contain"
-                  onError={(e) => {
-                    if (e.currentTarget.src !== FALLBACK_FAVICON) {
-                      e.currentTarget.src = FALLBACK_FAVICON;
-                    }
-                  }}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-xs font-medium text-foreground">
-                      {tab.title || rawUrl || '(無題)'}
-                    </span>
-                    {tab.pinned && (
-                      <Badge variant="info" className="shrink-0 gap-0.5">
-                        <Pin className="h-2.5 w-2.5" />
-                        ピン
-                      </Badge>
-                    )}
-                    {isDup && (
-                      <Badge variant="warning" className="shrink-0">
-                        重複
-                      </Badge>
-                    )}
-                    {tab.audible && (
-                      <Badge variant="secondary" className="shrink-0 gap-0.5">
-                        <Volume2 className="h-2.5 w-2.5" />
-                        再生中
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {extractDomain(rawUrl)} · {rawUrl}
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={Boolean(tab.pinned)}
-                  title={tab.pinned ? 'ピン留めタブは保護されています' : 'タブを閉じる'}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCloseTab(tab);
-                  }}
-                  className="shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </li>
-            );
-          })
+          tabs.map((tab, idx) => (
+            <TabListItem
+              key={tab.id ?? `${getTabUrl(tab)}-${idx}`}
+              tab={tab}
+              isDuplicate={tab.id != null && summary.duplicateIds.has(tab.id)}
+              isBusy={isBusy}
+              onActivate={onActivateTab}
+              onClose={onCloseTab}
+            />
+          ))
         )}
       </ul>
     </>
   );
-}
+});

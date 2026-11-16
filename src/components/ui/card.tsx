@@ -1,7 +1,7 @@
-import * as React from 'react';
+import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 
-export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function Card({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       className={cn(
@@ -13,7 +13,7 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
   );
 }
 
-export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function CardHeader({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       className={cn('flex items-center justify-between gap-2 px-3 pt-3 pb-2', className)}
@@ -22,15 +22,15 @@ export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDiv
   );
 }
 
-export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
+export function CardTitle({ className, ...props }: ComponentProps<'h2'>) {
   return (
-    <h3
+    <h2
       className={cn('text-xs font-semibold tracking-tight text-foreground', className)}
       {...props}
     />
   );
 }
 
-export function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function CardContent({ className, ...props }: ComponentProps<'div'>) {
   return <div className={cn('px-3 pb-3', className)} {...props} />;
 }

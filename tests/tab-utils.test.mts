@@ -2,14 +2,18 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  appendToMapList,
   extractDomain,
   filterTabs,
   findDuplicateTabs,
   findStaleTabs,
   getSafeFaviconUrl,
   GROUP_COLORS,
+  isRestorableUrl,
+  isTabGrouped,
   pickGroupColor,
   summarizeTabs,
+  toNonEmptyTabIds,
 } from '../src/lib/tab-utils.ts';
 
 describe('extractDomain', () => {
@@ -28,12 +32,35 @@ describe('extractDomain', () => {
   });
 });
 
+describe('isRestorableUrl', () => {
+  it('allows only valid http and https URLs', () => {
+    assert.equal(isRestorableUrl('https://example.com/path?q=1#hash'), true);
+    assert.equal(isRestorableUrl('http://localhost:3000/dashboard'), true);
+    assert.equal(isRestorableUrl('HTTPS://EXAMPLE.COM/UPPER'), true);
+
+    assert.equal(isRestorableUrl('javascript:alert(1)'), false);
+    assert.equal(isRestorableUrl('data:text/html,<script>alert(1)</script>'), false);
+    assert.equal(isRestorableUrl('blob:https://example.com/123'), false);
+    assert.equal(isRestorableUrl('vbscript:msgbox(1)'), false);
+    assert.equal(isRestorableUrl('file:///etc/passwd'), false);
+    assert.equal(isRestorableUrl('chrome://settings/'), false);
+    assert.equal(isRestorableUrl('chrome-extension://abcdef/popup.html'), false);
+    assert.equal(isRestorableUrl('about:blank'), false);
+    assert.equal(isRestorableUrl('http://'), false);
+    assert.equal(isRestorableUrl('not-a-url'), false);
+    assert.equal(isRestorableUrl(''), false);
+  });
+});
+
 describe('getSafeFaviconUrl', () => {
-  it('allows http and https favicon URLs and rejects unsafe protocols', () => {
+  it('allows http and https favicon URLs and rejects unsafe or malformed inputs', () => {
     assert.equal(getSafeFaviconUrl('https://example.com/favicon.ico'), 'https://example.com/favicon.ico');
     assert.equal(getSafeFaviconUrl('http://localhost:3000/icon.png'), 'http://localhost:3000/icon.png');
     assert.equal(getSafeFaviconUrl('chrome://favicon/https://example.com'), '');
     assert.equal(getSafeFaviconUrl('javascript:alert(1)', 'fallback.png'), 'fallback.png');
+    assert.equal(getSafeFaviconUrl('data:image/png;base64,AAAA', 'fallback.png'), 'fallback.png');
+    assert.equal(getSafeFaviconUrl('http://', 'fallback.png'), 'fallback.png');
+    assert.equal(getSafeFaviconUrl('https://invalid host/icon.png', 'fallback.png'), 'fallback.png');
     assert.equal(getSafeFaviconUrl(undefined, 'fallback.png'), 'fallback.png');
   });
 });
@@ -44,6 +71,31 @@ describe('pickGroupColor', () => {
     const c2 = pickGroupColor('github.com');
     assert.equal(c1, c2);
     assert.ok(GROUP_COLORS.includes(c1));
+  });
+});
+
+describe('toNonEmptyTabIds & helpers', () => {
+  it('returns null for empty arrays and a non-empty tuple otherwise', () => {
+    assert.equal(toNonEmptyTabIds([]), null);
+    assert.deepEqual(toNonEmptyTabIds([42]), [42]);
+    assert.deepEqual(toNonEmptyTabIds([1, 2, 3]), [1, 2, 3]);
+  });
+
+  it('appends values into Map bucket lists and checks tab group membership', () => {
+    const map = new Map<string, number[]>();
+    appendToMapList(map, 'a', 1);
+    appendToMapList(map, 'a', 2);
+    appendToMapList(map, 'b', 3);
+    assert.deepEqual(map.get('a'), [1, 2]);
+    assert.deepEqual(map.get('b'), [3]);
+
+    assert.equal(isTabGrouped({}), false);
+    assert.equal(isTabGrouped({ groupId: -1 }), false);
+    assert.equal(isTabGrouped({ groupId: -2 }), false);
+    assert.equal(isTabGrouped({ groupId: Number.NaN }), false);
+    assert.equal(isTabGrouped({ groupId: Number.POSITIVE_INFINITY }), false);
+    assert.equal(isTabGrouped({ groupId: 0 }), true);
+    assert.equal(isTabGrouped({ groupId: 7 }), true);
   });
 });
 
@@ -70,6 +122,28 @@ describe('findDuplicateTabs', () => {
       [2, 3, 6]
     );
   });
+
+  it('isolates incognito duplicates from normal tabs and handles malformed URLs with hashes', () => {
+    const tabs = [
+      { id: 1, index: 0, url: 'https://example.com/shared', incognito: false },
+      { id: 2, index: 1, url: 'https://example.com/shared', incognito: true },
+      { id: 3, index: 2, url: 'https://example.com/shared', incognito: true },
+      { id: 4, index: 3, url: 'not-a-url#first', incognito: false },
+      { id: 5, index: 4, url: 'not-a-url#second', incognito: false },
+      { id: 6, index: 5, url: '' },
+      { id: 7, index: 6, url: '' },
+    ];
+
+    const res = findDuplicateTabs(tabs, { ignoreHash: true });
+    assert.deepEqual(
+      res.duplicateTabs.map((t) => t.id),
+      [3, 5]
+    );
+    assert.deepEqual(
+      res.keepTabs.map((t) => t.id),
+      [1, 2, 4]
+    );
+  });
 });
 
 describe('filterTabs & findStaleTabs & summarizeTabs', () => {
@@ -94,7 +168,7 @@ describe('filterTabs & findStaleTabs & summarizeTabs', () => {
     );
   });
 
-  it('finds stale tabs excluding pinned, active, and audible tabs', () => {
+  it('finds stale tabs excluding pinned, active, and audible tabs and handles non-finite thresholds', () => {
     const now = 1_000_000_000;
     const old = now - 120 * 60_000;
     const recent = now - 5 * 60_000;
@@ -104,14 +178,27 @@ describe('filterTabs & findStaleTabs & summarizeTabs', () => {
       { id: 3, pinned: false, active: false, audible: true, lastAccessed: old },
       { id: 4, pinned: false, active: false, audible: false, lastAccessed: recent },
       { id: 5, pinned: false, active: false, audible: false, lastAccessed: old },
+      { id: 6, pinned: false, active: false, audible: false, lastAccessed: Number.NaN },
     ];
     assert.deepEqual(
       findStaleTabs(tabs, 60, now).map((t) => t.id),
       [5]
     );
+    assert.deepEqual(
+      findStaleTabs(tabs, Number.NaN, now).map((t) => t.id),
+      [5]
+    );
+    assert.deepEqual(
+      findStaleTabs(tabs, Number.POSITIVE_INFINITY, now).map((t) => t.id),
+      [5]
+    );
+    assert.deepEqual(
+      findStaleTabs(tabs, -10, now).map((t) => t.id),
+      [5]
+    );
   });
 
-  it('summarizes tab statistics', () => {
+  it('summarizes tab statistics without undercounting ungrouped when pinned tabs have groupId', () => {
     const tabs = [
       { id: 1, index: 0, url: 'https://github.com/a', pinned: false, groupId: -1 },
       { id: 2, index: 1, url: 'https://github.com/a', pinned: false, groupId: 5 },
@@ -124,5 +211,15 @@ describe('filterTabs & findStaleTabs & summarizeTabs', () => {
     assert.equal(summary.ungrouped, 1);
     assert.equal(summary.duplicates, 1);
     assert.ok(summary.duplicateIds.has(2));
+
+    const mixedTabs = [
+      { id: 10, pinned: true, groupId: 5 },
+      { id: 11, pinned: false, groupId: -1 },
+    ];
+    const mixedSummary = summarizeTabs(mixedTabs);
+    assert.equal(mixedSummary.pinned, 1);
+    assert.equal(mixedSummary.grouped, 1);
+    assert.equal(mixedSummary.ungrouped, 1);
+    assert.equal(filterTabs(mixedTabs, { filter: 'ungrouped' }).length, mixedSummary.ungrouped);
   });
 });

@@ -15,7 +15,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: false,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         popup: resolve(import.meta.dirname, 'popup.html'),
         'background/service-worker': resolve(import.meta.dirname, 'src/background/service-worker.ts'),

@@ -1,18 +1,18 @@
 import { Cpu, Download, RefreshCw } from 'lucide-react';
+import { memo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { LocalAiStatus, LocalLlmAvailability } from '@/lib/local-ai';
 import { cn } from '@/lib/utils';
 
-const LLM_STATUS_META: Record<
-  LocalLlmAvailability,
-  {
-    label: string;
-    variant: 'success' | 'info' | 'warning' | 'secondary';
-    hint: string;
-  }
-> = {
+interface LlmStatusMeta {
+  readonly label: string;
+  readonly variant: 'success' | 'info' | 'warning' | 'secondary';
+  readonly hint: string;
+}
+
+const LLM_STATUS_META = {
   available: {
     label: '利用可能',
     variant: 'success',
@@ -43,31 +43,33 @@ const LLM_STATUS_META: Record<
     variant: 'secondary',
     hint: 'Prompt API (LanguageModel) が無効です。chrome://flags 等をご確認ください。',
   },
+} satisfies Record<LocalLlmAvailability, LlmStatusMeta>;
+
+const LOADING_STATUS_META: LlmStatusMeta = {
+  label: '確認中',
+  variant: 'secondary',
+  hint: 'Chrome 内蔵モデルの利用可否を確認しています...',
 };
 
 interface LocalAiCardProps {
   status: LocalAiStatus | null;
   loading: boolean;
   downloadPct: number | null;
+  error: string | null;
   onRefresh: () => void;
   onPrepare: () => void;
 }
 
-export function LocalAiCard({
+export const LocalAiCard = memo(function LocalAiCard({
   status,
   loading,
   downloadPct,
+  error,
   onRefresh,
   onPrepare,
 }: LocalAiCardProps) {
   const llm = status?.llm;
-  const meta = llm
-    ? LLM_STATUS_META[llm.availability]
-    : {
-        label: '確認中',
-        variant: 'secondary' as const,
-        hint: 'Chrome 内蔵モデルの利用可否を確認しています...',
-      };
+  const meta = llm ? LLM_STATUS_META[llm.availability] : LOADING_STATUS_META;
   const canDownload = llm?.availability === 'downloadable' && downloadPct === null;
 
   return (
@@ -127,7 +129,16 @@ export function LocalAiCard({
         <p className="text-[11px] text-muted-foreground">
           {llm?.detail ? `${meta.hint} (${llm.detail})` : meta.hint}
         </p>
+
+        {error && (
+          <p
+            role="alert"
+            className="rounded-sm bg-destructive/10 px-2 py-1 text-[11px] font-medium text-destructive break-words"
+          >
+            {error}
+          </p>
+        )}
       </CardContent>
     </Card>
   );
-}
+});

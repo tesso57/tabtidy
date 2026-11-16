@@ -1,33 +1,35 @@
+import type { ComponentProps } from 'react';
 import { cn } from '@/lib/utils';
 
-export interface SwitchProps {
-  id?: string;
+export interface SwitchProps
+  extends Omit<
+    ComponentProps<'button'>,
+    'children' | 'type' | 'role' | 'aria-checked' | 'onClick'
+  > {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
-  disabled?: boolean;
-  'aria-label'?: string;
 }
 
 export function Switch({
-  id,
   checked,
   onCheckedChange,
   disabled = false,
-  'aria-label': ariaLabel,
+  className,
+  ...props
 }: SwitchProps) {
   return (
     <button
-      id={id}
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
         'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
-        checked ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-700'
+        checked ? 'bg-primary' : 'bg-slate-500',
+        className
       )}
+      {...props}
     >
       <span
         className={cn(

@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "タブ整理アシスタント - TabTidy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "散らかったタブを類似度で自動グループ化。不要タブの仕分け、重複タブ削除、検索、一時退避（スタッシュ）に対応。",
+  "incognito": "split",
   "permissions": [
     "tabs",
     "tabGroups",

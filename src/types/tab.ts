@@ -13,78 +13,81 @@ export type ChromeGroupColor =
   | 'grey';
 
 export interface TabLike {
-  id?: number;
-  windowId?: number;
-  index?: number;
-  url?: string;
-  pendingUrl?: string;
-  title?: string;
-  favIconUrl?: string;
-  pinned?: boolean;
-  active?: boolean;
-  audible?: boolean;
-  groupId?: number;
-  lastAccessed?: number;
+  readonly id?: number;
+  readonly windowId?: number;
+  readonly index?: number;
+  readonly url?: string;
+  readonly pendingUrl?: string;
+  readonly title?: string;
+  readonly favIconUrl?: string;
+  readonly pinned?: boolean;
+  readonly active?: boolean;
+  readonly audible?: boolean;
+  readonly incognito?: boolean;
+  readonly groupId?: number;
+  readonly lastAccessed?: number;
 }
 
 export interface PageSignals {
-  title: string;
-  metaDesc: string;
-  headings: string;
-  bodyText: string;
-  hasFormDraft: boolean;
-  hasVideo: boolean;
+  readonly title: string;
+  readonly metaDesc: string;
+  readonly headings: string;
+  readonly bodyText: string;
+  readonly hasFormDraft: boolean;
+  readonly hasVideo: boolean;
 }
 
 export interface InspectedEntry {
-  tab: TabLike;
-  signals: Partial<PageSignals> | null;
+  readonly tab: TabLike;
+  readonly signals: Partial<PageSignals> | null;
 }
 
 export interface GroupPlan {
-  title: string;
-  color: ChromeGroupColor;
-  collapsed: boolean;
-  tabIds: number[];
+  readonly title: string;
+  readonly color: ChromeGroupColor;
+  readonly collapsed: boolean;
+  readonly tabIds: readonly number[];
 }
 
 export interface ExtensionSettings {
-  autoGroup: boolean;
-  minGroupSize: number;
-  collapseGroups: boolean;
-  ignoreHashForDedup: boolean;
-  showBadge: boolean;
-  staleMinutes: number;
-  includeStaleInUnnecessary: boolean;
+  readonly autoGroup: boolean;
+  readonly minGroupSize: number;
+  readonly collapseGroups: boolean;
+  readonly ignoreHashForDedup: boolean;
+  readonly showBadge: boolean;
+  readonly staleMinutes: number;
+  readonly includeStaleInUnnecessary: boolean;
 }
 
 interface StashedTabItem {
-  title: string;
-  url: string;
-  favIconUrl: string;
+  readonly title: string;
+  readonly url: string;
+  readonly favIconUrl: string;
 }
 
 export interface StashedSession {
-  id: string;
-  name: string;
-  createdAt: number;
-  tabs: StashedTabItem[];
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: number;
+  readonly tabs: readonly StashedTabItem[];
+}
+
+interface UndoTabItem {
+  readonly url: string;
+  readonly title: string;
+  readonly windowId?: number;
 }
 
 export interface UndoSnapshot {
-  closedAt: number;
-  tabs: Array<{
-    url: string;
-    title: string;
-    windowId?: number;
-  }>;
+  readonly closedAt: number;
+  readonly tabs: readonly UndoTabItem[];
 }
 
 export interface TabSummary {
-  total: number;
-  pinned: number;
-  grouped: number;
-  ungrouped: number;
-  duplicates: number;
-  duplicateIds: Set<number>;
+  readonly total: number;
+  readonly pinned: number;
+  readonly grouped: number;
+  readonly ungrouped: number;
+  readonly duplicates: number;
+  readonly duplicateIds: ReadonlySet<number>;
 }

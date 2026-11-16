@@ -10,6 +10,8 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.sample
+.npmrc
 *.pem
 *.key
 *.p12
@@ -26,3 +28,4 @@ secrets/
 .secrets/
 id_rsa*
 id_ed25519*
+id_ecdsa*

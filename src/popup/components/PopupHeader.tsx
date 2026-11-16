@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
@@ -11,7 +12,7 @@ interface PopupHeaderProps {
   onScopeChange: (scope: Scope) => void;
 }
 
-export function PopupHeader({
+export const PopupHeader = memo(function PopupHeader({
   statsSummary,
   scope,
   totalTabs,
@@ -19,11 +20,11 @@ export function PopupHeader({
   onScopeChange,
 }: PopupHeaderProps) {
   return (
-    <header className="flex flex-col gap-2.5 border-b border-border bg-gradient-to-b from-blue-50/70 to-background px-3.5 pt-3 pb-2.5 dark:from-blue-950/25 dark:to-background">
+    <header className="flex flex-col gap-2.5 border-b border-border bg-linear-to-b from-blue-50/70 to-background px-3.5 pt-3 pb-2.5 dark:from-blue-950/25 dark:to-background">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <img src="/icons/icon32.png" alt="" className="h-5 w-5 shrink-0 rounded-sm" />
-          <span className="text-sm font-semibold tracking-tight text-foreground">TabTidy</span>
+          <img src="./icons/icon32.png" alt="" className="h-5 w-5 shrink-0 rounded-sm" />
+          <h1 className="text-sm font-semibold tracking-tight text-foreground">TabTidy</h1>
           <span className="truncate text-[11px] font-medium text-muted-foreground tabular-nums">
             {statsSummary}
           </span>
@@ -38,9 +39,10 @@ export function PopupHeader({
             <button
               key={s}
               type="button"
+              aria-pressed={scope === s}
               onClick={() => onScopeChange(s)}
               className={cn(
-                'rounded-xs px-2 py-0.5 text-[11px] font-medium transition-all cursor-pointer',
+                'rounded-xs px-2 py-0.5 text-[11px] font-medium transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 scope === s
                   ? 'bg-background font-semibold text-primary shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
@@ -68,4 +70,4 @@ export function PopupHeader({
       </TabsList>
     </header>
   );
-}
+});

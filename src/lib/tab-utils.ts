@@ -1,6 +1,6 @@
 import type { ChromeGroupColor, FilterKind, TabLike, TabSummary } from '../types/tab.ts';
 
-export const GROUP_COLORS: ChromeGroupColor[] = [
+export const GROUP_COLORS = [
   'blue',
   'cyan',
   'green',
@@ -10,29 +10,54 @@ export const GROUP_COLORS: ChromeGroupColor[] = [
   'purple',
   'red',
   'grey',
-];
+] as const satisfies readonly ChromeGroupColor[];
 
-/**
- * Return the effective URL of a Chrome tab.
- */
-export function getTabUrl(tab: TabLike | null | undefined): string {
-  if (!tab) return '';
-  return tab.url || tab.pendingUrl || '';
-}
+const SPECIAL_PROTOCOL_LABELS = new Map<string, string>([
+  ['chrome:', 'Chrome設定'],
+  ['chrome-extension:', '拡張機能'],
+  ['file:', 'ローカルファイル'],
+  ['about:', 'システム'],
+  ['devtools:', 'システム'],
+  ['edge:', 'システム'],
+]);
 
-/**
- * Return the favicon URL if it uses HTTP(S), otherwise fallback.
- */
-export function getSafeFaviconUrl(favIconUrl?: string, fallback = ''): string {
-  if (favIconUrl && (favIconUrl.startsWith('http://') || favIconUrl.startsWith('https://'))) {
-    return favIconUrl;
+export function appendToMapList<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const bucket = map.get(key);
+  if (bucket) {
+    bucket.push(value);
+  } else {
+    map.set(key, [value]);
   }
-  return fallback;
 }
 
-/**
- * Extract a clean human-readable domain or category label from a URL.
- */
+export function isTabGrouped(tab: TabLike): boolean {
+  return typeof tab.groupId === 'number' && Number.isFinite(tab.groupId) && tab.groupId >= 0;
+}
+
+export function getTabUrl(tab: TabLike | null | undefined): string {
+  return tab?.url || tab?.pendingUrl || '';
+}
+
+export function parseHttpUrl(rawUrl: unknown): URL | null {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  try {
+    const parsed = new URL(rawUrl);
+    const protocol = parsed.protocol.toLowerCase();
+    return protocol === 'http:' || protocol === 'https:' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isRestorableUrl(rawUrl: string): boolean {
+  return parseHttpUrl(rawUrl) !== null;
+}
+
+export function getSafeFaviconUrl(favIconUrl?: string, fallback = ''): string {
+  const parsed = parseHttpUrl(favIconUrl);
+  return parsed ? parsed.href : fallback;
+}
+
 export function extractDomain(rawUrl: string): string {
   if (!rawUrl || typeof rawUrl !== 'string') {
     return 'その他';
@@ -43,21 +68,20 @@ export function extractDomain(rawUrl: string): string {
     if (protocol === 'http:' || protocol === 'https:') {
       return parsed.hostname.replace(/^www\./i, '') || 'その他';
     }
-    if (protocol === 'chrome:') return 'Chrome設定';
-    if (protocol === 'chrome-extension:') return '拡張機能';
-    if (protocol === 'file:') return 'ローカルファイル';
-    if (protocol === 'about:' || protocol === 'devtools:' || protocol === 'edge:') {
-      return 'システム';
-    }
-    return 'その他';
+    return SPECIAL_PROTOCOL_LABELS.get(protocol) ?? 'その他';
   } catch {
     return 'その他';
   }
 }
 
 /**
- * Pick a deterministic Chrome tabGroup color for a label or domain name.
+ * Chrome's tabs.group / tabs.ungroup require a non-empty tuple.
  */
+export function toNonEmptyTabIds(ids: readonly number[]): [number, ...number[]] | null {
+  const [first, ...rest] = ids;
+  return first !== undefined ? [first, ...rest] : null;
+}
+
 export function pickGroupColor(label: string): ChromeGroupColor {
   let hash = 2166136261;
   const str = String(label || '');
@@ -68,12 +92,9 @@ export function pickGroupColor(label: string): ChromeGroupColor {
   return GROUP_COLORS[(hash >>> 0) % GROUP_COLORS.length];
 }
 
-/**
- * Normalize a URL for duplicate comparison.
- */
 function normalizeUrlForDedup(
   rawUrl: string,
-  options: { ignoreHash?: boolean } = {}
+  options: { readonly ignoreHash?: boolean } = {}
 ): string {
   const { ignoreHash = false } = options;
   if (!rawUrl || typeof rawUrl !== 'string') return '';
@@ -89,24 +110,19 @@ function normalizeUrlForDedup(
 }
 
 /**
- * Find duplicate tabs while never marking pinned tabs for closure.
- * Keeps the active tab if present among duplicates, otherwise the leftmost tab.
+ * Never marks pinned tabs as duplicates; when no pinned copy exists,
+ * keeps the active tab if present, otherwise the leftmost tab.
  */
 export function findDuplicateTabs<T extends TabLike>(
-  tabs: T[],
-  options: { ignoreHash?: boolean } = {}
+  tabs: readonly T[],
+  options: { readonly ignoreHash?: boolean } = {}
 ): { keepTabs: T[]; duplicateTabs: T[] } {
   const byUrl = new Map<string, T[]>();
   for (const tab of tabs) {
-    const rawUrl = getTabUrl(tab);
-    const key = normalizeUrlForDedup(rawUrl, options);
+    const key = normalizeUrlForDedup(getTabUrl(tab), options);
     if (!key) continue;
-    const bucket = byUrl.get(key);
-    if (bucket) {
-      bucket.push(tab);
-    } else {
-      byUrl.set(key, [tab]);
-    }
+    const dedupKey = `${tab.incognito ? 'i' : 'n'}:${key}`;
+    appendToMapList(byUrl, dedupKey, tab);
   }
 
   const keepTabs: T[] = [];
@@ -114,12 +130,15 @@ export function findDuplicateTabs<T extends TabLike>(
 
   for (const group of byUrl.values()) {
     if (group.length <= 1) {
-      if (group.length === 1) keepTabs.push(group[0]);
+      if (group[0]) keepTabs.push(group[0]);
       continue;
     }
 
-    const pinned = group.filter((t) => t.pinned);
-    const unpinned = group.filter((t) => !t.pinned);
+    const pinned: T[] = [];
+    const unpinned: T[] = [];
+    for (const tab of group) {
+      (tab.pinned ? pinned : unpinned).push(tab);
+    }
 
     if (pinned.length > 0) {
       keepTabs.push(...pinned);
@@ -131,33 +150,37 @@ export function findDuplicateTabs<T extends TabLike>(
       if (Boolean(a.active) !== Boolean(b.active)) {
         return a.active ? -1 : 1;
       }
-      return (a.index ?? 0) - (b.index ?? 0);
+      const idxA = typeof a.index === 'number' && Number.isFinite(a.index) ? a.index : 0;
+      const idxB = typeof b.index === 'number' && Number.isFinite(b.index) ? b.index : 0;
+      return idxA - idxB;
     });
 
-    keepTabs.push(sorted[0]);
-    duplicateTabs.push(...sorted.slice(1));
+    const [kept, ...duplicates] = sorted;
+    if (kept) {
+      keepTabs.push(kept);
+      duplicateTabs.push(...duplicates);
+    }
   }
 
   return { keepTabs, duplicateTabs };
 }
 
-/**
- * Filter tabs by search tokens and category filter.
- */
 export function filterTabs<T extends TabLike>(
-  tabs: T[],
-  options: { query?: string; filter?: FilterKind; duplicateIds?: Set<number> } = {}
+  tabs: readonly T[],
+  options: {
+    readonly query?: string;
+    readonly filter?: FilterKind;
+    readonly duplicateIds?: ReadonlySet<number>;
+  } = {}
 ): T[] {
-  const { query = '', filter = 'all', duplicateIds = new Set<number>() } = options;
-  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const { query = '', filter = 'all', duplicateIds } = options;
+  const trimmed = query.trim().toLowerCase();
+  const tokens = trimmed ? trimmed.split(/\s+/) : [];
 
   return tabs.filter((tab) => {
-    if (filter === 'duplicates' && (tab.id == null || !duplicateIds.has(tab.id))) return false;
+    if (filter === 'duplicates' && (tab.id == null || !duplicateIds?.has(tab.id))) return false;
     if (filter === 'audible' && !tab.audible) return false;
-    if (filter === 'ungrouped') {
-      const isGrouped = tab.groupId != null && tab.groupId !== -1;
-      if (tab.pinned || isGrouped) return false;
-    }
+    if (filter === 'ungrouped' && (tab.pinned || isTabGrouped(tab))) return false;
 
     if (tokens.length === 0) return true;
     const haystack = `${tab.title || ''} ${getTabUrl(tab)}`.toLowerCase();
@@ -165,36 +188,43 @@ export function filterTabs<T extends TabLike>(
   });
 }
 
-/**
- * Find inactive tabs older than thresholdMinutes (excluding pinned, active, and audible tabs).
- */
+export function toStaleCutoffMs(thresholdMinutes = 60): number {
+  const minutes =
+    Number.isFinite(thresholdMinutes) && thresholdMinutes > 0 ? Math.max(1, thresholdMinutes) : 60;
+  return minutes * 60_000;
+}
+
 export function findStaleTabs<T extends TabLike>(
-  tabs: T[],
+  tabs: readonly T[],
   thresholdMinutes = 60,
   nowMs = Date.now()
 ): T[] {
-  const cutoffMs = Math.max(1, thresholdMinutes) * 60_000;
+  const cutoffMs = toStaleCutoffMs(thresholdMinutes);
+  const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
   return tabs.filter((tab) => {
     if (tab.pinned || tab.active || tab.audible) return false;
-    if (typeof tab.lastAccessed !== 'number') return false;
-    return nowMs - tab.lastAccessed >= cutoffMs;
+    if (typeof tab.lastAccessed !== 'number' || !Number.isFinite(tab.lastAccessed)) return false;
+    return safeNowMs - tab.lastAccessed >= cutoffMs;
   });
 }
 
-/**
- * Build summary statistics for a list of tabs.
- */
 export function summarizeTabs(
-  tabs: TabLike[],
-  options: { ignoreHash?: boolean } = {}
+  tabs: readonly TabLike[],
+  options: { readonly ignoreHash?: boolean } = {}
 ): TabSummary {
   const { duplicateTabs } = findDuplicateTabs(tabs, options);
   let pinned = 0;
   let grouped = 0;
+  let ungrouped = 0;
 
   for (const tab of tabs) {
+    const isGrouped = isTabGrouped(tab);
     if (tab.pinned) pinned += 1;
-    if (tab.groupId != null && tab.groupId !== -1) grouped += 1;
+    if (isGrouped) {
+      grouped += 1;
+    } else if (!tab.pinned) {
+      ungrouped += 1;
+    }
   }
 
   const duplicateIds = new Set<number>();
@@ -206,7 +236,7 @@ export function summarizeTabs(
     total: tabs.length,
     pinned,
     grouped,
-    ungrouped: Math.max(0, tabs.length - pinned - grouped),
+    ungrouped,
     duplicates: duplicateTabs.length,
     duplicateIds,
   };

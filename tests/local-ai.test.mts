@@ -93,4 +93,121 @@ describe('detectLocalAiStatus', () => {
     assert.deepEqual(progressValues, [50, 100]);
     assert.equal(next.llm.availability, 'available');
   });
+
+  it('supports function-typed LanguageModel constructors via globalThis and sanitizes non-finite progress', async () => {
+    function FakeLanguageModel() {}
+    let availabilityThis: unknown = null;
+    let createThis: unknown = null;
+    const progressValues: number[] = [];
+
+    FakeLanguageModel.availability = async function availability(this: unknown) {
+      availabilityThis = this;
+      return 'after-download';
+    };
+    FakeLanguageModel.create = async function create(
+      this: unknown,
+      opts?: {
+        monitor?: (m: {
+          addEventListener: (type: string, cb: (e: { loaded?: number }) => void) => void;
+        }) => void;
+      }
+    ) {
+      createThis = this;
+      opts?.monitor?.({
+        addEventListener: (_type, cb) => {
+          cb({ loaded: Number.NaN });
+          cb({ loaded: 1.5 });
+        },
+      });
+      return { destroy: () => {} };
+    };
+
+    const prevLm = Reflect.get(globalThis, 'LanguageModel');
+    const hadLm = Object.hasOwn(globalThis, 'LanguageModel');
+    Reflect.set(globalThis, 'LanguageModel', FakeLanguageModel);
+
+    try {
+      const detected = await detectLocalAiStatus();
+      assert.equal(detected.llm.availability, 'downloadable');
+      assert.equal(availabilityThis, FakeLanguageModel);
+
+      await prepareLocalModel((pct) => progressValues.push(pct));
+      assert.equal(createThis, FakeLanguageModel);
+      assert.deepEqual(progressValues, [0, 100]);
+    } finally {
+      if (hadLm) {
+        Reflect.set(globalThis, 'LanguageModel', prevLm);
+      } else {
+        Reflect.deleteProperty(globalThis, 'LanguageModel');
+      }
+    }
+  });
+
+  it('handles legacy session cleanup, total-based progress, create failures, and null-prototype errors', async () => {
+    let legacyDestroyed = false;
+    const legacyStatus = await prepareLocalModel(undefined, {
+      ai: {
+        languageModel: {
+          capabilities: async () => ({ available: 'readily' }),
+          create: async () => ({
+            destroy: async () => {
+              legacyDestroyed = true;
+            },
+          }),
+        },
+      },
+      hasSegmenter: true,
+    });
+    assert.equal(legacyDestroyed, true);
+    assert.equal(legacyStatus.llm.availability, 'available');
+
+    const byteProgress: number[] = [];
+    await prepareLocalModel((pct) => byteProgress.push(pct), {
+      LanguageModel: {
+        availability: async () => 'available',
+        create: async (opts) => {
+          opts?.monitor?.({
+            addEventListener: (_type, cb) => {
+              cb({ loaded: 50, total: 200 });
+              cb({ loaded: Number.POSITIVE_INFINITY, total: 200 });
+              cb({ loaded: -0.2 });
+            },
+          });
+          return {
+            destroy: () => {
+              throw new Error('cleanup failure should not break prepare');
+            },
+          };
+        },
+      },
+    });
+    assert.deepEqual(byteProgress, [25, 0, 0]);
+
+    await assert.rejects(
+      () =>
+        prepareLocalModel(undefined, {
+          LanguageModel: {
+            availability: async () => 'downloadable',
+            create: async () => {
+              throw new Error('Download aborted');
+            },
+          },
+        }),
+      /Download aborted/
+    );
+
+    const nullProtoError = await detectLocalAiStatus({
+      LanguageModel: {
+        availability: async () => {
+          throw Object.create(null);
+        },
+      },
+      hasSegmenter: false,
+    });
+    assert.equal(nullProtoError.llm.availability, 'error');
+    assert.equal(nullProtoError.llm.detail, 'Unknown error');
+
+    const unsupportedStatus = await prepareLocalModel(undefined, { hasSegmenter: false });
+    assert.equal(unsupportedStatus.llm.availability, 'unsupported');
+  });
 });

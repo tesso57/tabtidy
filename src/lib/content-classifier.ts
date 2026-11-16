@@ -1,5 +1,13 @@
 import type { GroupPlan, InspectedEntry, PageSignals, TabLike } from '../types/tab.ts';
-import { extractDomain, findDuplicateTabs, getTabUrl, pickGroupColor } from './tab-utils.ts';
+import {
+  appendToMapList,
+  extractDomain,
+  findDuplicateTabs,
+  getTabUrl,
+  parseHttpUrl,
+  pickGroupColor,
+  toStaleCutoffMs,
+} from './tab-utils.ts';
 
 const JA_SEGMENTER =
   typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
@@ -19,7 +27,7 @@ const STOP_WORDS = new Set([
   'google', 'yahoo', 'bing', 'microsoft',
 ]);
 
-const ERROR_PATTERNS = [
+const ERROR_PATTERNS: readonly RegExp[] = [
   /\b404\b/i,
   /\b500\b/i,
   /\b502\b/i,
@@ -32,7 +40,7 @@ const ERROR_PATTERNS = [
   /エラーが発生しました/,
 ];
 
-const AUTH_LEFTOVER_PATTERNS = [
+const AUTH_LEFTOVER_PATTERNS: readonly RegExp[] = [
   /oauth\/?callback/i,
   /auth\/?callback/i,
   /認証が完了/,
@@ -42,50 +50,173 @@ const AUTH_LEFTOVER_PATTERNS = [
   /このウィンドウを閉じて/,
 ];
 
+const MAX_TITLE_LENGTH = 300;
+const MAX_SITE_SUFFIX_LENGTH = 32;
+const LINE_BREAK_RE = /[\n\r\u2028\u2029]/;
+const WHITESPACE_RE = /\s/;
+const EN_TOKEN_RE = /[a-z0-9][a-z0-9._-]{1,28}/g;
+const EDGE_PUNCT_RE = /^[._-]+|[._-]+$/g;
+const JA_TOKEN_RE = /[\u4E00-\u9FFF]{2,12}|[\u30A0-\u30FF]{2,14}/g;
+const BRAND_SUFFIX_PREFIX_RE = /^(google|yahoo|microsoft)\s+/;
+const PUNCT_OR_SYMBOL_ONLY_RE = /^[\p{P}\p{S}\p{Z}\p{C}]+$/u;
+
 const GENERIC_SITE_SUFFIXES = new Set([
   'google', 'youtube', 'wikipedia', 'github', 'qiita', 'zenn', 'note',
   'amazon', 'rakuten', 'yahoo', 'twitter', 'x', 'facebook', 'instagram',
   'slack', 'notion', 'bing', 'microsoft',
 ]);
 
-/**
- * Tokenize Japanese and English text using Chrome's built-in Intl.Segmenter,
- * with regex fallback.
- */
-export function tokenizeText(text: string): string[] {
-  if (!text || typeof text !== 'string') return [];
-  const tokens: string[] = [];
+function isAsciiDigits(value: string): boolean {
+  if (value.length === 0) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x30 || code > 0x39) return false;
+  }
+  return true;
+}
+
+function isTwoCharHiragana(value: string): boolean {
+  if (value.length !== 2) return false;
+  const c0 = value.charCodeAt(0);
+  const c1 = value.charCodeAt(1);
+  return c0 >= 0x3040 && c0 <= 0x309f && c1 >= 0x3040 && c1 <= 0x309f;
+}
+
+function isCommonLetterStart(code: number): boolean {
+  return (
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x3041 && code <= 0x30ff) ||
+    (code >= 0x4e00 && code <= 0x9fff)
+  );
+}
+
+function forEachToken(text: string, visit: (token: string) => void): void {
+  if (!text || typeof text !== 'string') return;
 
   if (JA_SEGMENTER) {
     for (const { segment, isWordLike } of JA_SEGMENTER.segment(text)) {
       if (!isWordLike) continue;
+      // Only U+0130 ('İ') expands to length >= 2 under trim().toLowerCase() from length < 2.
+      if (segment.length < 2 && segment.charCodeAt(0) !== 0x0130) continue;
       const normalized = segment.trim().toLowerCase();
       if (normalized.length < 2) continue;
-      if (/^\d+$/.test(normalized)) continue;
-      if (/^[\u3040-\u309F]{1,2}$/.test(normalized)) continue;
+      if (
+        normalized.length === 2 &&
+        normalized.charCodeAt(0) >= 0xd800 &&
+        normalized.charCodeAt(0) <= 0xdbff
+      ) {
+        continue;
+      }
+      if (!isCommonLetterStart(normalized.charCodeAt(0)) && PUNCT_OR_SYMBOL_ONLY_RE.test(normalized)) {
+        continue;
+      }
+      if (isAsciiDigits(normalized)) continue;
+      if (isTwoCharHiragana(normalized)) continue;
       if (STOP_WORDS.has(normalized)) continue;
-      tokens.push(normalized);
+      visit(normalized);
     }
-    return tokens;
+    return;
   }
 
   const lower = text.toLowerCase();
-  const enMatches = lower.match(/[a-z0-9][a-z0-9._-]{1,28}/g) || [];
+  const enMatches = lower.match(EN_TOKEN_RE) ?? [];
   for (const w of enMatches) {
-    const cleaned = w.replace(/^[._-]+|[._-]+$/g, '');
-    if (cleaned.length >= 2 && !/^\d+$/.test(cleaned) && !STOP_WORDS.has(cleaned)) {
-      tokens.push(cleaned);
+    const cleaned = w.replace(EDGE_PUNCT_RE, '');
+    if (cleaned.length >= 2 && !isAsciiDigits(cleaned) && !STOP_WORDS.has(cleaned)) {
+      visit(cleaned);
     }
   }
 
-  const jaMatches = text.match(/[\u4E00-\u9FFF]{2,12}|[\u30A0-\u30FF]{2,14}/g) || [];
+  const jaMatches = text.match(JA_TOKEN_RE) ?? [];
   for (const w of jaMatches) {
     if (!STOP_WORDS.has(w)) {
-      tokens.push(w);
+      visit(w);
+    }
+  }
+}
+
+export function tokenizeText(text: string): string[] {
+  if (!text || typeof text !== 'string') return [];
+  const tokens: string[] = [];
+  forEachToken(text, (token) => {
+    tokens.push(token);
+  });
+  return tokens;
+}
+
+function isWhitespaceCode(code: number): boolean {
+  if (code === 0x20) return true;
+  if (code <= 0x20) return code >= 0x09 && code <= 0x0d;
+  if (code < 0xa0) return false;
+  return WHITESPACE_RE.test(String.fromCharCode(code));
+}
+
+function isSiteSuffixSeparatorCode(code: number): boolean {
+  return (
+    code === 0x2d || // -
+    code === 0x7c || // |
+    code === 0x2013 || // –
+    code === 0x2014 || // —
+    code === 0x00b7 || // ·
+    code === 0x3a // :
+  );
+}
+
+/**
+ * Locate the rightmost trailing site-suffix separator in O(n) time without regex backtracking.
+ */
+function splitTrailingSuffix(title: string): { mainPart: string; suffixPart: string } | null {
+  let sepIdx = -1;
+  let firstNonWsAfterSep = -1;
+  const minNonWsLimit = title.length - MAX_SITE_SUFFIX_LENGTH;
+
+  // The suffix class forbids separators, so only the rightmost separator can match.
+  // Any non-whitespace char further than MAX_SITE_SUFFIX_LENGTH from the end rules out a match.
+  for (let i = title.length - 1; i >= 0; i -= 1) {
+    const code = title.charCodeAt(i);
+    if (isSiteSuffixSeparatorCode(code)) {
+      sepIdx = i;
+      break;
+    }
+    if (!isWhitespaceCode(code)) {
+      if (i < minNonWsLimit) return null;
+      firstNonWsAfterSep = i;
     }
   }
 
-  return tokens;
+  if (sepIdx <= 0 || firstNonWsAfterSep === -1 || firstNonWsAfterSep === sepIdx + 1) {
+    return null;
+  }
+  if (!isWhitespaceCode(title.charCodeAt(sepIdx - 1))) {
+    return null;
+  }
+
+  let mainEnd = sepIdx - 1;
+  while (mainEnd >= 0 && isWhitespaceCode(title.charCodeAt(mainEnd))) {
+    mainEnd -= 1;
+  }
+  if (mainEnd < 0) return null;
+
+  const rawMain = title.slice(0, mainEnd + 1);
+  if (LINE_BREAK_RE.test(rawMain)) return null;
+
+  const mainPart = rawMain.trim();
+  if (mainPart.length === 0) return null;
+
+  return {
+    mainPart,
+    suffixPart: title.slice(firstNonWsAfterSep),
+  };
+}
+
+function sliceSafe(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const last = text.charCodeAt(maxLen - 1);
+  return last >= 0xd800 && last <= 0xdbff ? text.slice(0, maxLen - 1) : text.slice(0, maxLen);
+}
+
+function getBoundedTitle(tab: TabLike, signals: Partial<PageSignals> | null | undefined): string {
+  return sliceSafe(signals?.title || tab.title || '', MAX_TITLE_LENGTH);
 }
 
 /**
@@ -95,71 +226,93 @@ export function tokenizeText(text: string): string[] {
  */
 export function stripTrailingSiteSuffix(title: string, url = ''): string {
   if (!title || typeof title !== 'string') return '';
-  const match = title.match(/^(.+?)\s+[-|–—·:]\s+([^|\-–—·:]{1,32})$/);
-  if (!match) return title;
+  const split = splitTrailingSuffix(title);
+  if (!split) return title;
 
-  const [, mainPart, suffixPart] = match;
-  const suffixLower = suffixPart.trim().toLowerCase();
-  const domain = extractDomain(url).toLowerCase();
-  const domainLabels = domain.split('.').filter((p) => p.length >= 2 && p !== 'co' && p !== 'ne');
+  const suffixLower = split.suffixPart.trim().toLowerCase();
+  if (GENERIC_SITE_SUFFIXES.has(suffixLower) || BRAND_SUFFIX_PREFIX_RE.test(suffixLower)) {
+    return split.mainPart;
+  }
 
-  const isSiteSuffix =
-    domainLabels.some((label) => suffixLower.includes(label)) ||
-    GENERIC_SITE_SUFFIXES.has(suffixLower) ||
-    /^(google|yahoo|microsoft)\s+/i.test(suffixLower);
+  const parsed = parseHttpUrl(url);
+  if (!parsed) return title;
 
-  return isSiteSuffix && mainPart.trim().length > 0 ? mainPart.trim() : title;
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const parts = host.split('.');
+  const labels = parts.length > 1 ? parts.slice(0, -1) : parts;
+  const domainLabels = labels.filter((p) => p.length >= 2 && p !== 'co' && p !== 'ne');
+
+  return domainLabels.some((label) => suffixLower.includes(label)) ? split.mainPart : title;
 }
 
-function buildWeightedTermMap(tab: TabLike, signals: Partial<PageSignals> | null): Map<string, number> {
-  const weights = new Map<string, number>();
-  const addTokens = (text: string, weight: number) => {
-    for (const token of tokenizeText(text)) {
-      weights.set(token, (weights.get(token) || 0) + weight);
-    }
+function incrementMapValue<K>(map: Map<K, number>, key: K, delta = 1): void {
+  map.set(key, (map.get(key) ?? 0) + delta);
+}
+
+function collectTabIds(tabs: readonly TabLike[]): number[] {
+  const ids: number[] = [];
+  for (const tab of tabs) {
+    if (tab.id != null) ids.push(tab.id);
+  }
+  return ids;
+}
+
+interface TermVector {
+  readonly terms: ReadonlyMap<string, number>;
+  readonly norm: number;
+}
+
+function addWeightedTokens(terms: Map<string, number>, text: string, weight: number): void {
+  if (!text) return;
+  forEachToken(text, (token) => {
+    incrementMapValue(terms, token, weight);
+  });
+}
+
+function buildTermVector(tab: TabLike, signals: Partial<PageSignals> | null): TermVector {
+  const terms = new Map<string, number>();
+  const rawTitle = getBoundedTitle(tab, signals);
+  const cleanTitle = rawTitle ? stripTrailingSiteSuffix(rawTitle, getTabUrl(tab)) : '';
+
+  addWeightedTokens(terms, cleanTitle, 3);
+  addWeightedTokens(terms, signals?.headings || '', 2.5);
+  addWeightedTokens(terms, signals?.metaDesc || '', 2);
+  addWeightedTokens(terms, signals?.bodyText || '', 1);
+
+  let normSq = 0;
+  for (const weight of terms.values()) {
+    normSq += weight * weight;
+  }
+
+  return {
+    terms,
+    norm: normSq > 0 ? Math.sqrt(normSq) : 0,
   };
-
-  const url = getTabUrl(tab);
-  const cleanTitle = stripTrailingSiteSuffix(signals?.title || tab.title || '', url);
-
-  addTokens(cleanTitle, 3);
-  addTokens(signals?.headings || '', 2.5);
-  addTokens(signals?.metaDesc || '', 2);
-  addTokens(signals?.bodyText || '', 1);
-
-  return weights;
 }
 
-function cosineSimilarity(mapA: Map<string, number>, mapB: Map<string, number>): number {
-  if (mapA.size === 0 || mapB.size === 0) return 0;
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (const [k, v] of mapA.entries()) {
-    normA += v * v;
-    const bVal = mapB.get(k);
-    if (bVal) dot += v * bVal;
-  }
-  for (const v of mapB.values()) {
-    normB += v * v;
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+function cosineSimilarity(dot: number, normA: number, normB: number): number {
+  if (dot === 0 || normA === 0 || normB === 0) return 0;
+  return Math.min(1, dot / (normA * normB));
+}
+
+function isSearchEngineResultsUrl(rawUrl: string): boolean {
+  const parsed = parseHttpUrl(rawUrl);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const isSearchHost =
+    /^google\.[a-z.]+$/.test(host) || host === 'bing.com' || host.endsWith('.bing.com');
+  return isSearchHost && (parsed.pathname === '/search' || parsed.pathname.startsWith('/search/'));
 }
 
 export interface UnnecessaryAnalysisOptions {
-  staleMinutes?: number;
-  ignoreHash?: boolean;
-  includeStaleInUnnecessary?: boolean;
-  nowMs?: number;
+  readonly staleMinutes?: number;
+  readonly ignoreHash?: boolean;
+  readonly includeStaleInUnnecessary?: boolean;
+  readonly nowMs?: number;
 }
 
-/**
- * Separate unnecessary tabs (duplicates, errors, auth leftovers, stale searches, optionally stale tabs)
- * while protecting pinned, active, audible, and form-draft tabs.
- */
 export function analyzeUnnecessaryTabs(
-  entries: InspectedEntry[],
+  entries: readonly InspectedEntry[],
   options: UnnecessaryAnalysisOptions = {}
 ): {
   unnecessaryTabs: TabLike[];
@@ -173,12 +326,13 @@ export function analyzeUnnecessaryTabs(
     nowMs = Date.now(),
   } = options;
 
-  const tabs = entries.map((e) => e.tab);
-  const { duplicateTabs } = findDuplicateTabs(tabs, { ignoreHash });
-  const duplicateIds = new Set(
-    duplicateTabs.map((t) => t.id).filter((id): id is number => id != null)
+  const { duplicateTabs } = findDuplicateTabs(
+    entries.map((e) => e.tab),
+    { ignoreHash }
   );
-  const cutoffMs = Math.max(1, staleMinutes) * 60_000;
+  const duplicateIds = new Set(collectTabIds(duplicateTabs));
+  const cutoffMs = toStaleCutoffMs(staleMinutes);
+  const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
 
   const unnecessaryTabs: TabLike[] = [];
   const remainingEntries: InspectedEntry[] = [];
@@ -195,9 +349,13 @@ export function analyzeUnnecessaryTabs(
     }
 
     const url = getTabUrl(tab);
-    const title = signals?.title || tab.title || '';
+    const title = getBoundedTitle(tab, signals);
     const body = signals?.bodyText || '';
     const textSample = `${title} ${body.slice(0, 250)}`;
+    const inactiveMs =
+      !tab.active && typeof tab.lastAccessed === 'number' && Number.isFinite(tab.lastAccessed)
+        ? safeNowMs - tab.lastAccessed
+        : null;
 
     const isError = ERROR_PATTERNS.some(
       (re) => re.test(title) || (body.length < 400 && re.test(textSample))
@@ -206,15 +364,8 @@ export function analyzeUnnecessaryTabs(
       (re) => re.test(url) || re.test(textSample)
     );
     const isStaleSearch =
-      !tab.active &&
-      typeof tab.lastAccessed === 'number' &&
-      nowMs - tab.lastAccessed >= 15 * 60_000 &&
-      /google\.[^/]+\/search|bing\.com\/search/i.test(url);
-    const isStale =
-      includeStaleInUnnecessary &&
-      !tab.active &&
-      typeof tab.lastAccessed === 'number' &&
-      nowMs - tab.lastAccessed >= cutoffMs;
+      inactiveMs !== null && inactiveMs >= 15 * 60_000 && isSearchEngineResultsUrl(url);
+    const isStale = includeStaleInUnnecessary && inactiveMs !== null && inactiveMs >= cutoffMs;
 
     if (duplicateIds.has(tab.id) || isError || isAuthLeftover || isStaleSearch || isStale) {
       unnecessaryTabs.push(tab);
@@ -227,97 +378,201 @@ export function analyzeUnnecessaryTabs(
 }
 
 export interface ClusterOptions {
-  minGroupSize?: number;
-  collapseGroups?: boolean;
-  similarityThreshold?: number;
+  readonly minGroupSize?: number;
+  readonly collapseGroups?: boolean;
+  readonly similarityThreshold?: number;
 }
 
-/**
- * Cluster tabs with similar content across domains and name groups by top shared keywords.
- */
-export function clusterTabsByContent(
-  entries: InspectedEntry[],
-  options: ClusterOptions = {}
-): GroupPlan[] {
-  const { minGroupSize = 2, collapseGroups = false, similarityThreshold = 0.2 } = options;
-  const unpinned = entries.filter((e) => !e.tab.pinned && e.tab.id != null);
-  const termMaps = unpinned.map((e) => buildWeightedTermMap(e.tab, e.signals));
+function clusterSimilarVectors(
+  vectors: readonly TermVector[],
+  similarityThreshold: number
+): (x: number) => number {
+  const n = vectors.length;
+  const parent = new Int32Array(n);
+  const rank = new Int32Array(n);
+  for (let i = 0; i < n; i += 1) {
+    parent[i] = i;
+  }
 
-  const parent = unpinned.map((_, i) => i);
-  const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+  const find = (x: number): number => {
+    let curr = x;
+    while (parent[curr] !== curr) {
+      parent[curr] = parent[parent[curr]];
+      curr = parent[curr];
+    }
+    return curr;
+  };
+
   const union = (a: number, b: number) => {
     const ra = find(a);
     const rb = find(b);
-    if (ra !== rb) parent[rb] = ra;
+    if (ra === rb) return;
+    if (rank[ra] < rank[rb]) {
+      parent[ra] = rb;
+    } else if (rank[ra] > rank[rb]) {
+      parent[rb] = ra;
+    } else {
+      parent[rb] = ra;
+      rank[ra] += 1;
+    }
   };
 
-  for (let i = 0; i < unpinned.length; i += 1) {
-    for (let j = i + 1; j < unpinned.length; j += 1) {
-      if (cosineSimilarity(termMaps[i], termMaps[j]) >= similarityThreshold) {
+  if (similarityThreshold <= 0) {
+    for (let i = 1; i < n; i += 1) {
+      union(0, i);
+    }
+    return find;
+  }
+
+  const invertedIndex = new Map<string, number[]>();
+  for (let i = 0; i < n; i += 1) {
+    for (const term of vectors[i].terms.keys()) {
+      appendToMapList(invertedIndex, term, i);
+    }
+  }
+
+  const dots = new Float64Array(n);
+  const seen = new Int32Array(n);
+  const touched: number[] = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const vecI = vectors[i];
+    if (vecI.norm === 0) continue;
+
+    // Positive stamp per i avoids clearing `seen`; -stamp caches same-component skips.
+    const stamp = i + 1;
+    let rootI = find(i);
+    touched.length = 0;
+
+    for (const [term, weightI] of vecI.terms) {
+      const postings = invertedIndex.get(term);
+      if (!postings || postings.length < 2) continue;
+
+      for (let k = postings.length - 1; k >= 0; k -= 1) {
+        const j = postings[k];
+        if (j <= i) break;
+
+        const state = seen[j];
+        if (state === -stamp) continue;
+        if (state !== stamp) {
+          if (find(j) === rootI) {
+            seen[j] = -stamp;
+            continue;
+          }
+          seen[j] = stamp;
+          touched.push(j);
+        }
+        dots[j] += weightI * (vectors[j].terms.get(term) ?? 0);
+      }
+    }
+
+    for (let c = 0; c < touched.length; c += 1) {
+      const j = touched[c];
+      const dot = dots[j];
+      dots[j] = 0;
+      if (find(j) === rootI) continue;
+      if (cosineSimilarity(dot, vecI.norm, vectors[j].norm) >= similarityThreshold) {
         union(i, j);
+        rootI = find(i);
       }
     }
   }
 
-  const components = new Map<number, number[]>();
-  for (let i = 0; i < unpinned.length; i += 1) {
-    const root = find(i);
-    const list = components.get(root);
-    if (list) {
-      list.push(i);
-    } else {
-      components.set(root, [i]);
+  return find;
+}
+
+function buildClusterPlan(
+  indices: readonly number[],
+  vectors: readonly TermVector[],
+  unpinned: readonly InspectedEntry[],
+  collapsed: boolean
+): GroupPlan {
+  const docFreq = new Map<string, number>();
+  const totalWeight = new Map<string, number>();
+  const tabIds: number[] = [];
+
+  for (const idx of indices) {
+    const id = unpinned[idx].tab.id;
+    if (id != null) tabIds.push(id);
+    for (const [term, w] of vectors[idx].terms) {
+      incrementMapValue(docFreq, term);
+      incrementMapValue(totalWeight, term, w);
     }
+  }
+
+  const minCount = Math.min(2, indices.length);
+  let firstTerm = '';
+  let firstCount = -1;
+  let firstWeight = -1;
+  let secondTerm = '';
+  let secondCount = -1;
+  let secondWeight = -1;
+
+  for (const [term, count] of docFreq) {
+    if (count < minCount) continue;
+    const weight = totalWeight.get(term) ?? 0;
+    if (count > firstCount || (count === firstCount && weight > firstWeight)) {
+      secondTerm = firstTerm;
+      secondCount = firstCount;
+      secondWeight = firstWeight;
+      firstTerm = term;
+      firstCount = count;
+      firstWeight = weight;
+    } else if (count > secondCount || (count === secondCount && weight > secondWeight)) {
+      secondTerm = term;
+      secondCount = count;
+      secondWeight = weight;
+    }
+  }
+
+  const title =
+    firstCount >= minCount
+      ? secondCount >= minCount
+        ? `${firstTerm} · ${secondTerm}`
+        : firstTerm
+      : extractDomain(getTabUrl(unpinned[indices[0]].tab));
+
+  return {
+    title,
+    color: pickGroupColor(title),
+    collapsed,
+    tabIds,
+  };
+}
+
+export function clusterTabsByContent(
+  entries: readonly InspectedEntry[],
+  options: ClusterOptions = {}
+): GroupPlan[] {
+  const { minGroupSize = 2, collapseGroups = false, similarityThreshold = 0.2 } = options;
+  const safeMinGroupSize =
+    Number.isFinite(minGroupSize) && minGroupSize >= 1 ? Math.floor(minGroupSize) : 2;
+  const safeThreshold =
+    Number.isFinite(similarityThreshold) && similarityThreshold >= 0 ? similarityThreshold : 0.2;
+  const unpinned = entries.filter((e) => !e.tab.pinned && e.tab.id != null);
+  const n = unpinned.length;
+  if (n === 0 || n < safeMinGroupSize) return [];
+
+  const vectors = unpinned.map((e) => buildTermVector(e.tab, e.signals));
+  const find = clusterSimilarVectors(vectors, safeThreshold);
+
+  const components = new Map<number, number[]>();
+  for (let i = 0; i < n; i += 1) {
+    appendToMapList(components, find(i), i);
   }
 
   const plans: GroupPlan[] = [];
-
+  const collapsed = Boolean(collapseGroups);
   for (const indices of components.values()) {
-    if (indices.length < minGroupSize) continue;
-
-    const docFreq = new Map<string, number>();
-    const totalWeight = new Map<string, number>();
-    for (const idx of indices) {
-      for (const [term, w] of termMaps[idx].entries()) {
-        docFreq.set(term, (docFreq.get(term) || 0) + 1);
-        totalWeight.set(term, (totalWeight.get(term) || 0) + w);
-      }
-    }
-
-    const sharedTerms = [...docFreq.entries()]
-      .filter(([, count]) => count >= Math.min(2, indices.length))
-      .sort((a, b) => {
-        if (b[1] !== a[1]) return b[1] - a[1];
-        return (totalWeight.get(b[0]) || 0) - (totalWeight.get(a[0]) || 0);
-      })
-      .slice(0, 2)
-      .map(([term]) => term);
-
-    const title =
-      sharedTerms.length > 0
-        ? sharedTerms.join(' · ')
-        : extractDomain(getTabUrl(unpinned[indices[0]].tab));
-
-    plans.push({
-      title,
-      color: pickGroupColor(title),
-      collapsed: Boolean(collapseGroups),
-      tabIds: indices
-        .map((i) => unpinned[i].tab.id)
-        .filter((id): id is number => id != null),
-    });
+    if (indices.length < safeMinGroupSize) continue;
+    plans.push(buildClusterPlan(indices, vectors, unpinned, collapsed));
   }
 
   return plans.sort((a, b) => b.tabIds.length - a.tabIds.length);
 }
 
-/**
- * Plan full similarity-based organization:
- * 1) Put judged unnecessary tabs into a "不要" group
- * 2) Cluster remaining tabs by content similarity
- */
 export function planSmartOrganize(
-  entries: InspectedEntry[],
+  entries: readonly InspectedEntry[],
   options: UnnecessaryAnalysisOptions & ClusterOptions = {}
 ): {
   plans: GroupPlan[];
@@ -335,9 +590,7 @@ export function planSmartOrganize(
       title: '不要',
       color: 'grey',
       collapsed: Boolean(options.collapseGroups),
-      tabIds: unnecessaryTabs
-        .map((t) => t.id)
-        .filter((id): id is number => id != null),
+      tabIds: collectTabIds(unnecessaryTabs),
     });
   }
 
